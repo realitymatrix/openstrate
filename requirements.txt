@@ -1,0 +1,5 @@
+python-dotenv
+requests
+nanoid
+websocket-client
+tornado
