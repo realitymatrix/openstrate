@@ -1,1 +1,1 @@
-from openstrate import openstrate, write, write_file
+from .openstrate import *

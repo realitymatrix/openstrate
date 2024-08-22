@@ -609,7 +609,6 @@ class FileSystem:
         return filesystem
     
 
-    
     def create_directory(self, directory: str):
         command = f'{self._route}{directory}'
         data = {
@@ -646,14 +645,23 @@ class FileSystem:
         return post_to_filesystem
 
 
-if __name__ == '__main__':
+#   The main function can be used to invoke the "run local file on cloud" pipeline
+def __main__():
+    description='''
+        This function accepts the path to the local .py script
+        which will be run on the cloud (and not saved on the cloud). 
+        If the scripts returns an output, the output will be printed to the terminal.
+
+        Usage:
+
+        python openstrate --file='<path to your .py file>'
+        python openstrate -f='<path to your .py file>'
+    '''
     argv = sys.argv[1:]
-    print(argv)
     try:
         options, args = getopt.getopt(argv, "f:", ["file="])
     except:
-        print("Error")
+        print(f'File Input Error \n {description}')
     for name, value in options:
-        print(name, value)
         if name in ['-f', '--file']:
             write_file(value)

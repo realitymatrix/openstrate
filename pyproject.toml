@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "openstrate"
-version = "0.1.3"
+version = "0.1.4"
 description = "Interface with Python machine vision sandbox over the internet."
 authors = ["Petr Korolev <peterkorolev95@gmail.com>"]
 license = "Unlicense"
@@ -18,3 +18,7 @@ tornado = "^6.4.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.scripts]
+openstrate = 'openstrate.openstrate:__main__'
