@@ -572,7 +572,7 @@ def write():
 
 
 # Writes the entire contents of a python file into console and runs
-def write_file(filepath: str):
+def run_local_file(filepath: str):
     kernel = Kernel().comm
     contents = []
     with open(filepath, mode='r', encoding='utf8') as file:
@@ -591,8 +591,27 @@ class FileSystem:
     def __init__(self, user: User):
         self._route = 'api/contents'
         self._user = user
-    
+
+
+    def file_contents(self, filepath: str):
+        ''' Fetches the contents of a file on the cloud '''
+        command = f'{self._route}{filepath}'
+        data = {
+            'type': 'file',
+            'path': f'{filepath}'
+        }
+        get_filesystem = CommandManager(
+            self._user).createRunCommand(
+        command=command,
+        type=RequestType.GET,
+        data=json_encode(data))
+        filesystem = get_filesystem['content']
+        print(filesystem)
+        return filesystem
+
+
     def directory_contents(self, directory: str):
+        ''' Fetches the contents of a directory on the cloud '''
         command = f'{self._route}{directory}'
         data = {
             'type': 'directory',
@@ -604,8 +623,8 @@ class FileSystem:
         type=RequestType.GET,
         data=json_encode(data))
         filesystem = get_filesystem['content']
-        for item in filesystem:
-            print(item['name'])
+        # for item in filesystem:
+        #     print(item['name'])
         return filesystem
     
 
@@ -626,6 +645,12 @@ class FileSystem:
 
 
     def create_file(self, filepath: str):
+        '''
+            This function will create a file on the cloud with the same
+            extension and filename.
+
+                filepath (str) - path to the file on the cloud
+        '''
         filename = basename(filepath)
         file = filepath.split('.')[0]
         extension = filename.split('.')[1]
@@ -641,7 +666,41 @@ class FileSystem:
             command=command,
             type=type,
             data=json_encode(data))
-        print(post_to_filesystem)
+        # print(post_to_filesystem)
+        return post_to_filesystem
+    
+
+    def copy_local_file(self, sourcefile_path: str, filepath: str):
+        '''
+            This function will determine if a file exists on the local machine,
+            and if it detects a file on the same path, it will load the contents
+            into memory and create a copy of this file on the cloud.
+
+            sourcefile_path (str) - path to the local file
+            filepath        (str) - path to the file on the cloud
+        '''
+        filename = basename(filepath)
+        file = filepath.split('.')[0]
+        extension = filename.split('.')[1]
+        command = f'{self._route}{file}.{extension}'
+        file_data = None
+        if os.path.exists(sourcefile_path):
+            with open(file=sourcefile_path, mode='r') as content:
+                file_data = content.read()
+            content.close()
+        data = {
+            'name': file,
+            'type': 'file',
+            'format': 'text',
+            'path': filepath,
+            'content': file_data
+        }
+        type = RequestType.PUT
+        post_to_filesystem = CommandManager(self._user).createRunCommand(
+            command=command,
+            type=type,
+            data=json_encode(data))  
+        # print(post_to_filesystem)
         return post_to_filesystem
 
 
@@ -664,4 +723,4 @@ def __main__():
         print(f'File Input Error \n {description}')
     for name, value in options:
         if name in ['-f', '--file']:
-            write_file(value)
+            run_local_file(value)
