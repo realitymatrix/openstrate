@@ -15,9 +15,9 @@ from dotenv import load_dotenv
 from tornado.escape import json_decode, json_encode, utf8
 
 load_dotenv()
-API_PROTOCOL = os.getenv('API_PROTOCOL')
+API_PROTOCOL = 'http'
 API_HOST = os.getenv('API_HOST')
-API_PORT = os.getenv('API_PORT')
+API_PORT = '3333'
 ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
 API_URL = f'{API_PROTOCOL}://{API_HOST}:{API_PORT}'
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 120))
