@@ -34,6 +34,37 @@ class RequestType:
     PATCH = 'patch'
     DELETE = 'delete'
 
+#   Types of HTTP response status codes
+class ResponseCode:
+    OK          = 200
+    CREATED     = 201
+    NO_CONTENT  = 204
+
+
+class KernelInitializationException(Exception):
+    def __init__(self):
+        print('[KernelInitializationException]:     Failed to initialize the kernel.')
+
+
+class WebsocketIntitializationException(Exception):
+    def __init__(self):
+        print('[WebsocketIntitializationException]: Failed to initialize the websocket connection.')
+
+
+class KernelTerminationException(Exception):
+    def __init__(self):
+        print('[KernelTerminationException]:        Failed to terminate the kernel.')
+
+
+class FileSystemException(Exception):
+    def __init__(self):
+        print('[FileSystemException]:               The filesystem operation could not be completed.')
+
+
+class UnexpectedResponseException(Exception):
+    def __init__(self):
+        print('[UnexpectedResponseException]:       The server responded with an unexpected response code.')
+
 
 class KernelClient():
     
@@ -330,18 +361,21 @@ class User:
                 'email': email,
                 'password': passwd
         }
-        reg_res = requests.post(
-            headers=headers,
-            url=f'{API_URL}/users',
-            data=dumps(body)
-        )
-        assert reg_res.status_code == 201
-        self.id = reg_res.json()["id"]
-        tokens = self._authenticateUser(email, passwd)
-        self.access_T = tokens['access']
-        self.refresh_T = tokens['refresh']
-        usr = self._serializeUser()
-        return usr
+        try:
+            reg_res = requests.post(
+                headers=headers,
+                url=f'{API_URL}/users',
+                data=dumps(body)
+            )
+            assert reg_res.status_code == ResponseCode.CREATED, UnexpectedResponseException
+            self.id = reg_res.json()["id"]
+            tokens = self._authenticateUser(email, passwd)
+            self.access_T = tokens['access']
+            self.refresh_T = tokens['refresh']
+            usr = self._serializeUser()
+            return usr
+        except UnexpectedResponseException:
+            pass
     
     #   Retrieve access and refresh tokens from the server with valid user data
     def _authenticateUser(self, email: str, passwd: str):
@@ -352,16 +386,17 @@ class User:
                 'email': email,
                 'password': passwd
         }
-        auth_res = requests.post(
-            headers=headers,
-            url=f'{API_URL}/auth',
-            data=dumps(body)
-        )
-        assert auth_res.status_code == 201
-        return { 
-            'access': auth_res.json()["accessToken"], 
-            'refresh': auth_res.json()["refreshToken"] 
-            }
+        try:
+            auth_res = requests.post(
+                headers=headers,
+                url=f'{API_URL}/auth',
+                data=dumps(body)
+            )
+            assert auth_res.status_code == ResponseCode.CREATED, UnexpectedResponseException
+            return {'access': auth_res.json()["accessToken"], 
+                    'refresh': auth_res.json()["refreshToken"]}
+        except UnexpectedResponseException:
+            pass
     
     #   Deletes the specified user and removes all data
     def _deleteUser(self):
@@ -369,11 +404,14 @@ class User:
             "Content-Type": "application/json",
             "Authorization": f'Bearer {self.access_T}'
         }
-        del_res = requests.delete(
-            headers=headers,
-            url=f'{API_URL}/users/{self.id}'
-        )
-        assert del_res.status_code == 204
+        try:
+            del_res = requests.delete(
+                headers=headers,
+                url=f'{API_URL}/users/{self.id}'
+            )
+            assert del_res.status_code == ResponseCode.NO_CONTENT, UnexpectedResponseException
+        except UnexpectedResponseException:
+            pass
     
     #   Initialize user class, generate id and password if none are provided (embedded implementation)
     def __init__(self, 
@@ -418,13 +456,16 @@ class CommandManager:
                 'userId': self.user.id,
                 'type': type
         }
-        command_res = requests.post(
-            headers=headers,
-            url=f'{API_URL}/commands/commandString',
-            data=dumps(body)
-        )
-        assert command_res.status_code == 201
-        return command_res.json()["_id"]
+        try:
+            command_res = requests.post(
+                headers=headers,
+                url=f'{API_URL}/commands/commandString',
+                data=dumps(body))
+            assert command_res.status_code == ResponseCode.CREATED, UnexpectedResponseException
+            return command_res.json()["_id"]
+        except UnexpectedResponseException:
+            pass
+
     
     # Delete command via REST interface
     def deleteCommand(self, command_id: str):
@@ -436,15 +477,18 @@ class CommandManager:
             'commandId': command_id,
             'userId': self.user.id,
         }
-        del_res = requests.delete(
-            headers=headers,
-            data=dumps(body),
-            url=f'{API_URL}/commands/commandId'
-        )
-        assert del_res.status_code == 200
+        try:
+            del_res = requests.delete(
+                headers=headers,
+                data=dumps(body),
+                url=f'{API_URL}/commands/commandId'
+            )
+            assert del_res.status_code == ResponseCode.OK, UnexpectedResponseException
+        except UnexpectedResponseException:
+            pass
 
     # Run command via REST interface
-    def runCommand(self, command_id: str, data: str):
+    def runCommand(self, command_id: str, data: str = None):
         headers = {
             "Content-Type": "application/json",
             "Authorization": f'Bearer {self.user.access_T}'
@@ -460,36 +504,42 @@ class CommandManager:
                 'commandId': command_id,
                 'userId': self.user.id
             }
-        run_res = requests.post(
-            headers=headers,
-            data=dumps(body),
-            url=f'{API_URL}/commands/runCommand'
-        )
-        if not run_res.ok:
-            return f'status: {run_res.status_code} ' + f'There was an internal error. {run_res.text}'
-        
-        response = run_res.json()
-        # print(response['result']['data'])
-        return response['result']['data']
+        try:
+            run_res = requests.post(
+                headers=headers,
+                data=dumps(body),
+                url=f'{API_URL}/commands/runCommand')
+            assert run_res.ok, UnexpectedResponseException
+            response = run_res.json()
+            return response['result']['data']
+        except UnexpectedResponseException:
+            pass
     
     # Helper function that combines creating and running a command
     def createRunCommand(self, 
                          command: str, 
                          type: str, 
                          data = None):
-        if data != None:
-            return self.runCommand(self.createCommand(command, type), data)
+        if data:
+            try:
+                return self.runCommand(self.createCommand(command, type), data)
+            except UnexpectedResponseException:
+                pass
         else:
-            return self.runCommand(self.createCommand(command, type), data=None)
-
-
+            try:
+                return self.runCommand(self.createCommand(command, type), data=None)
+            except UnexpectedResponseException:
+                pass
 
 
 class Kernel:
 
     # Create kernel on remote machine via REST interface
     def _createKernel(self, user: User):
-        post_to_kernels = CommandManager(user).createCommand('api/kernels', 'post')
+        try:
+            post_to_kernels = CommandManager(user).createCommand('api/kernels', 'post')
+        except KernelInitializationException:
+            pass
         headers = {
             "Content-Type": "application/json",
             "Authorization": f'Bearer {user.access_T}'
@@ -498,29 +548,35 @@ class Kernel:
             'commandId': post_to_kernels,
             'userId': user.id
         }
-        run_res = requests.post(
-            headers=headers,
-            data=dumps(body),
-            url=f'{API_URL}/commands/runCommand'
-        )
-        if not run_res.ok:
-            return f'status: {run_res.status_code} ' + f'There was an internal error. {run_res.text}'
-        
-        response = run_res.json()
-        # print(response['result']['data']['id'])
-        return response['result']['data']['id']
-    
+        try:
+            run_res = requests.post(
+                headers=headers,
+                data=dumps(body),
+                url=f'{API_URL}/commands/runCommand'
+            )
+            print(run_res.status_code)
+            assert run_res.ok, KernelInitializationException
+            response = run_res.json()
+            return response['result']['data']['id']
+        except KernelInitializationException:
+            pass
+
+
     #   Create websocket connection to kernel
     def _createWebsocket(self, kernel_id: str):
         log = logging.getLogger('KernelClient')
-        return KernelClient(
-            HTTP_API_ENDPOINT,
-            WS_API_ENDPOINT,
-            kernel_id,
-            timeout=60,
-            logger=log
-        )
-    
+        try:
+            return KernelClient(
+                HTTP_API_ENDPOINT,
+                WS_API_ENDPOINT,
+                kernel_id,
+                timeout=60,
+                logger=log
+            )
+        except WebsocketIntitializationException:
+            pass
+
+
     def _deleteKernel(self, user: User, kernel_id: str):
         delete_to_kernels = CommandManager(user).createCommand(f'api/kernels/{kernel_id}', 'delete')
         headers = {
@@ -531,13 +587,15 @@ class Kernel:
             'commandId': delete_to_kernels,
             'userId': user.id
         }
-        run_res = requests.post(
-            headers=headers,
-            data=dumps(body),
-            url=f'{API_URL}/commands/runCommand'
-        )
-        if not run_res.ok:
-            return f'status: {run_res.status_code} ' + f'There was an internal error. {run_res.text}'
+        try:
+            run_res = requests.post(
+                headers=headers,
+                data=dumps(body),
+                url=f'{API_URL}/commands/runCommand'
+            )
+            assert run_res.status_code == ResponseCode.NO_CONTENT, KernelTerminationException
+        except KernelTerminationException:
+            pass
         
 
     #   Initialization of the Kernel class starts with authentication pipeline
@@ -546,13 +604,17 @@ class Kernel:
             self._user = User()
         else:
             self._user = user
-        self._kernel = self._createKernel(self._user)
-        self.comm = self._createWebsocket(self._kernel)
+        try:
+            self._kernel = self._createKernel(self._user)
+            self.comm = self._createWebsocket(self._kernel)
+        except KernelInitializationException:
+            pass
     
+    #   Using this code has proven to be unstable in this form
     # def __del__(self):
     #     self.comm.shutdown()
     #     self._deleteKernel(user=self._user, kernel_id=self._kernel)
-    
+
 
 
 # Initialization of openstrate command line console
@@ -585,29 +647,59 @@ def run_local_file(filepath: str):
     return result
 
 
-
 class FileSystem:
+    ''' Functions for the Cloud file system '''
 
     def __init__(self, user: User):
         self._route = 'api/contents'
         self._user = user
+    
 
-
-    def file_contents(self, filepath: str):
-        ''' Fetches the contents of a file on the cloud '''
+    def check_file_exists(self, filepath: str):
+        ''' 
+            Checks if a file exists on the cloud on the 
+                @param: filepath (str) 
+        '''
         command = f'{self._route}{filepath}'
         data = {
             'type': 'file',
             'path': f'{filepath}'
         }
-        get_filesystem = CommandManager(
-            self._user).createRunCommand(
-        command=command,
-        type=RequestType.GET,
-        data=json_encode(data))
-        filesystem = get_filesystem['content']
-        print(filesystem)
-        return filesystem
+        try:
+            get_filesystem = CommandManager(
+                self._user).createRunCommand(
+                    command=command,
+                    type=RequestType.GET,
+                    data=json_encode(data))
+        except FileSystemException:
+            pass
+        for key in get_filesystem:
+            if key == 'message':
+                return False
+        if get_filesystem:
+            return (get_filesystem['name'] == basename(filepath))
+
+
+
+    def file_contents(self, filepath: str):
+        ''' 
+            Fetches the contents of a file on the cloud 
+                @param: filepath (str) 
+        '''
+        command = f'{self._route}{filepath}'
+        data = {
+            'type': 'file',
+            'path': f'{filepath}'
+        }
+        try:
+            get_filesystem = CommandManager(
+                self._user).createRunCommand(
+                    command=command,
+                    type=RequestType.GET,
+                    data=json_encode(data))
+            return get_filesystem
+        except FileSystemException:
+            return None
 
 
     def directory_contents(self, directory: str):
@@ -617,15 +709,16 @@ class FileSystem:
             'type': 'directory',
             'path': f'{directory}'
         }
-        get_filesystem = CommandManager(
-            self._user).createRunCommand(
-        command=command,
-        type=RequestType.GET,
-        data=json_encode(data))
-        filesystem = get_filesystem['content']
-        # for item in filesystem:
-        #     print(item['name'])
-        return filesystem
+        try:
+            get_filesystem = CommandManager(
+                self._user).createRunCommand(
+                    command=command,
+                    type=RequestType.GET,
+                    data=json_encode(data))
+            assert get_filesystem, FileSystemException
+            return get_filesystem
+        except FileSystemException:
+            return None
     
 
     def create_directory(self, directory: str):
@@ -636,12 +729,15 @@ class FileSystem:
             'path': f'{directory}',
             'name': f'{directory}'
         }
-        post_to_filesystem = CommandManager(
-            self._user).createRunCommand(
-        command=command,
-        type=RequestType.PUT,
-        data=json_encode(data))
-        return post_to_filesystem
+        try:
+            post_to_filesystem = CommandManager(
+                self._user).createRunCommand(
+            command=command,
+            type=RequestType.PUT,
+            data=json_encode(data))
+            return post_to_filesystem
+        except FileSystemException:
+            pass
 
 
     def create_file(self, filepath: str):
@@ -661,13 +757,15 @@ class FileSystem:
             'format': 'text',
             'path': filepath,
         }
-        type = RequestType.PUT
-        post_to_filesystem = CommandManager(self._user).createRunCommand(
-            command=command,
-            type=type,
-            data=json_encode(data))
-        # print(post_to_filesystem)
-        return post_to_filesystem
+        try:
+            type = RequestType.PUT
+            post_to_filesystem = CommandManager(self._user).createRunCommand(
+                command=command,
+                type=type,
+                data=json_encode(data))
+            return post_to_filesystem
+        except FileSystemException:
+            pass
     
 
     def copy_local_file(self, sourcefile_path: str, filepath: str):
@@ -695,13 +793,85 @@ class FileSystem:
             'path': filepath,
             'content': file_data
         }
-        type = RequestType.PUT
-        post_to_filesystem = CommandManager(self._user).createRunCommand(
-            command=command,
-            type=type,
-            data=json_encode(data))  
-        # print(post_to_filesystem)
-        return post_to_filesystem
+        try:
+            type = RequestType.PUT
+            post_to_filesystem = CommandManager(self._user).createRunCommand(
+                command=command,
+                type=type,
+                data=json_encode(data))
+            return post_to_filesystem
+        except FileSystemException:
+            pass
+
+
+    # Deletes a file on the cloud
+    def delete_file(self, filepath: str):
+        '''
+            This function will delete the file on the cloud on the path provided.
+
+                filepath (str) - path to the file on the cloud
+        '''
+        filename = basename(filepath)
+        file = filepath.split('.')[0]
+        extension = filename.split('.')[1]
+        command = f'{self._route}{file}.{extension}'
+        data = {
+            'path': filepath
+        }
+        try:
+            type = RequestType.DELETE
+            delete_to_filesystem = CommandManager(self._user).createRunCommand(
+                command=command,
+                type=type,
+                data=json_encode(data))
+            return delete_to_filesystem
+        except FileSystemException:
+            pass
+    
+
+    # Deletes a directory on the cloud
+    def delete_directory(self, directory: str):
+        '''
+            This function will delete the file on the cloud on the path provided.
+
+                filepath (str) - path to the file on the cloud
+        '''
+        base_directory = directory.split('/')[0]
+        dirname = directory.split('/')[1]
+        if base_directory:
+            try:
+                parent_dir = self.directory_contents(base_directory)
+                workspace_directories = []
+                for dir in parent_dir:
+                    workspace_directories.append(dir['name'])
+                # Directory should exist before deleting
+                assert dirname in workspace_directories, FileSystemException
+            except FileSystemException:
+                pass
+        else:   # This directory exist under /root
+            try:
+                parent_dir = self.directory_contents('/')['content']
+                workspace_directories = []
+                for dir in parent_dir:
+                    workspace_directories.append(dir['name'])
+                # Directory should exist before deleting
+                assert dirname in workspace_directories, FileSystemException
+            except FileSystemException:
+                pass
+        command = f'{self._route}{directory}'
+        data = {
+            'path': directory,
+        }
+        try:
+            type = RequestType.DELETE
+            delete_to_filesystem = CommandManager(self._user).createRunCommand(
+                command=command,
+                type=type,
+                data=json_encode(data))
+            return delete_to_filesystem
+        except FileSystemException:
+            pass
+
 
 
 #   The main function can be used to invoke the "run local file on cloud" pipeline
