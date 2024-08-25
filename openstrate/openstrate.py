@@ -9,15 +9,16 @@ import websocket
 from json import dumps
 from uuid import uuid4
 from nanoid import generate
-from os.path import basename
 from threading import Thread
 from dotenv import load_dotenv
+from os.path import basename, dirname
 from tornado.escape import json_decode, json_encode, utf8
 
 load_dotenv()
 API_PROTOCOL = 'http'
 API_HOST = os.getenv('API_HOST')
 API_PORT = '3333'
+PYTHON_INTERPRETER = 'python3'
 ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
 API_URL = f'{API_PROTOCOL}://{API_HOST}:{API_PORT}'
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 120))
@@ -45,21 +46,21 @@ class KernelInitializationException(Exception):
     def __init__(self):
         print('[KernelInitializationException]:     Failed to initialize the kernel.')
 
-
 class WebsocketIntitializationException(Exception):
     def __init__(self):
         print('[WebsocketIntitializationException]: Failed to initialize the websocket connection.')
 
+class ScriptExecutionFailureException(Exception):
+    def __init__(self):
+        print('[ScriptExecutionFailureException]:   Failed to execute a script on the remote machine.')
 
 class KernelTerminationException(Exception):
     def __init__(self):
         print('[KernelTerminationException]:        Failed to terminate the kernel.')
 
-
 class FileSystemException(Exception):
     def __init__(self):
         print('[FileSystemException]:               The filesystem operation could not be completed.')
-
 
 class UnexpectedResponseException(Exception):
     def __init__(self):
@@ -118,7 +119,7 @@ class KernelClient():
 
         url = f"{self.http_api_endpoint}/{self.kernel_id}?token={self.access_token}"
         response = requests.delete(url, timeout=60)
-        if response.status_code == 204:
+        if response.status_code == ResponseCode.NO_CONTENT:
             self.log.info(f"Kernel {self.kernel_id} shutdown")
             return True
         else:
@@ -340,11 +341,14 @@ class KernelClient():
         )
 
 
-#   Class responsible for creating, deleting, editing and authentication
-class User:
 
-    #   Serialize the user object for easier parsing
+class User:
+    '''
+        Class responsible for creating, deleting, editing and authentication
+    '''
+
     def _serializeUser(self):
+        ''' Serialize the user object for easier parsing '''
         return {
             'email': self.email,
             'id': self.id,
@@ -352,8 +356,9 @@ class User:
             'refresh_T': self.refresh_T,
         }
   
-    #   Create the user on the server via REST API
+
     def _createUser(self, email: str, passwd: str):
+        ''' Create the user on the server via REST API '''
         headers = {
             "Content-Type": "application/json"
         }
@@ -377,8 +382,9 @@ class User:
         except UnexpectedResponseException:
             pass
     
-    #   Retrieve access and refresh tokens from the server with valid user data
+
     def _authenticateUser(self, email: str, passwd: str):
+        ''' Retrieve access and refresh tokens from the server with valid user data '''
         headers = {
             "Content-Type": "application/json"
         }
@@ -398,8 +404,9 @@ class User:
         except UnexpectedResponseException:
             pass
     
-    #   Deletes the specified user and removes all data
+
     def _deleteUser(self):
+        ''' Deletes the specified user and removes all data '''
         headers = {
             "Content-Type": "application/json",
             "Authorization": f'Bearer {self.access_T}'
@@ -413,13 +420,14 @@ class User:
         except UnexpectedResponseException:
             pass
     
-    #   Initialize user class, generate id and password if none are provided (embedded implementation)
+
     def __init__(self, 
                 email=None, 
                 passwd=None,
                 id=None,  
                 accessToken=None,
                 refreshToken=None):
+        ''' Initialize user class, generate id and password if none are provided (embedded implementation) '''
         self.email = email
         self.id = id
         self.passwd = passwd
@@ -438,15 +446,18 @@ class User:
         self._deleteUser()
 
 
-#   Handles REST commands
-class CommandManager:
 
-    # Authenticated user is required to run commands
+class CommandManager:
+    '''
+        Handles REST commands
+    '''
+
     def __init__(self, user: User):
+        ''' Authenticated user is required to run commands '''
         self.user = user
 
-    # Create command via REST interface
     def createCommand(self, command: str, type: str):
+        ''' Create command via REST interface '''
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.user.access_T}"
@@ -467,8 +478,8 @@ class CommandManager:
             pass
 
     
-    # Delete command via REST interface
     def deleteCommand(self, command_id: str):
+        ''' Delete command via REST interface '''
         headers = {
             "Content-Type": "application/json",
             "Authorization": f'Bearer {self.user.access_T}'
@@ -487,8 +498,9 @@ class CommandManager:
         except UnexpectedResponseException:
             pass
 
-    # Run command via REST interface
+
     def runCommand(self, command_id: str, data: str = None):
+        ''' Run command via REST interface '''
         headers = {
             "Content-Type": "application/json",
             "Authorization": f'Bearer {self.user.access_T}'
@@ -515,11 +527,11 @@ class CommandManager:
         except UnexpectedResponseException:
             pass
     
-    # Helper function that combines creating and running a command
     def createRunCommand(self, 
                          command: str, 
                          type: str, 
                          data = None):
+        ''' Helper function that combines creating and running a command '''
         if data:
             try:
                 return self.runCommand(self.createCommand(command, type), data)
@@ -533,37 +545,57 @@ class CommandManager:
 
 
 class Kernel:
+    ''' 
+        Kernel objects which can be connected to via websocket connection
+    '''
 
-    # Create kernel on remote machine via REST interface
     def _createKernel(self, user: User):
+        ''' 
+            Creates a new Python kernel, inherits the User object
+                @param: user (User) 
+        '''
+        data = {
+            'name': PYTHON_INTERPRETER
+        }
         try:
-            post_to_kernels = CommandManager(user).createCommand('api/kernels', 'post')
+            post_to_kernels = CommandManager(
+                user).createRunCommand(
+                    command=self._route, 
+                    type=RequestType.POST,
+                    data=json_encode(data))
+            kernel_id = post_to_kernels['id']
+            return kernel_id      
         except KernelInitializationException:
             pass
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f'Bearer {user.access_T}'
-        }
-        body = {
-            'commandId': post_to_kernels,
-            'userId': user.id
+    
+
+    def _createKernelCWD(self, user: User, cwd: str):
+        ''' 
+            Creates a new kernel at specific working directory
+                @param: user (User) 
+                @param: cwd  (str) 
+        '''
+        data = {
+            'name': PYTHON_INTERPRETER,
+            'path': cwd
         }
         try:
-            run_res = requests.post(
-                headers=headers,
-                data=dumps(body),
-                url=f'{API_URL}/commands/runCommand'
-            )
-            print(run_res.status_code)
-            assert run_res.ok, KernelInitializationException
-            response = run_res.json()
-            return response['result']['data']['id']
+            post_to_kernels = CommandManager(
+                user).createRunCommand(
+                    command=self._route, 
+                    type=RequestType.POST,
+                    data=json_encode(data))
+            kernel_id = post_to_kernels['id']
+            return kernel_id      
         except KernelInitializationException:
             pass
 
 
-    #   Create websocket connection to kernel
     def _createWebsocket(self, kernel_id: str):
+        ''' 
+            Creates a websocket connection to specific kernel
+                @param: kernel_id  (str) 
+        '''
         log = logging.getLogger('KernelClient')
         try:
             return KernelClient(
@@ -571,8 +603,7 @@ class Kernel:
                 WS_API_ENDPOINT,
                 kernel_id,
                 timeout=60,
-                logger=log
-            )
+                logger=log)
         except WebsocketIntitializationException:
             pass
 
@@ -598,8 +629,9 @@ class Kernel:
             pass
         
 
-    #   Initialization of the Kernel class starts with authentication pipeline
-    def __init__(self, user=None):
+    def __init__(self, user = None):
+        ''' Initialization of the Kernel class starts with authentication pipeline '''
+        self._route = 'api/kernels'
         if user == None:
             self._user = User()
         else:
@@ -609,11 +641,6 @@ class Kernel:
             self.comm = self._createWebsocket(self._kernel)
         except KernelInitializationException:
             pass
-    
-    #   Using this code has proven to be unstable in this form
-    # def __del__(self):
-    #     self.comm.shutdown()
-    #     self._deleteKernel(user=self._user, kernel_id=self._kernel)
 
 
 
@@ -643,8 +670,7 @@ def run_local_file(filepath: str):
         file.close()
     result = kernel.execute(contents)[0].strip()
     kernel.shutdown()
-    print(result)
-    return result
+    return result    
 
 
 class FileSystem:
@@ -675,10 +701,36 @@ class FileSystem:
             pass
         for key in get_filesystem:
             if key == 'message':
+                print(get_filesystem[key])
                 return False
-        if get_filesystem:
-            return (get_filesystem['name'] == basename(filepath))
+            elif key == 'name':
+                return (get_filesystem[key] == basename(filepath))
+    
 
+    def _run_remote_file(self, filepath: str):
+        ''' 
+            Run a remote file on the remote 
+                @param: filepath (str) 
+        '''
+        try:
+            kernel = Kernel(self._user).comm
+            command = f'!{PYTHON_INTERPRETER} {filepath}'
+            result = kernel.execute(command)[0].strip()
+            kernel.shutdown()
+            print(result)
+            return result
+        except ScriptExecutionFailureException:
+            pass
+        
+
+    def run_script(self, path_to_script: str):
+        ''' 
+            Runs a script on the cloud, checks that script exists
+                @param: filepath (str) 
+        '''
+        # assert self.check_file_exists(filepath=path_to_script), FileSystemException
+        return self._run_remote_file(filepath=path_to_script)
+    
 
 
     def file_contents(self, filepath: str):
@@ -703,7 +755,10 @@ class FileSystem:
 
 
     def directory_contents(self, directory: str):
-        ''' Fetches the contents of a directory on the cloud '''
+        ''' 
+            Fetches the contents of a directory on the cloud 
+                @param: directory (str)
+        '''
         command = f'{self._route}{directory}'
         data = {
             'type': 'directory',
@@ -722,6 +777,10 @@ class FileSystem:
     
 
     def create_directory(self, directory: str):
+        """ 
+            Responsible for creating directories on the remote
+                 @param: directory (str)
+        """
         command = f'{self._route}{directory}'
         data = {
             'format': 'json',
@@ -745,7 +804,7 @@ class FileSystem:
             This function will create a file on the cloud with the same
             extension and filename.
 
-                filepath (str) - path to the file on the cloud
+                @param: filepath (str) - path to the file on the cloud
         '''
         filename = basename(filepath)
         file = filepath.split('.')[0]
@@ -774,8 +833,8 @@ class FileSystem:
             and if it detects a file on the same path, it will load the contents
             into memory and create a copy of this file on the cloud.
 
-            sourcefile_path (str) - path to the local file
-            filepath        (str) - path to the file on the cloud
+            @param: sourcefile_path (str) - path to the local file
+            @param: filepath        (str) - path to the file on the cloud
         '''
         filename = basename(filepath)
         file = filepath.split('.')[0]
@@ -799,6 +858,7 @@ class FileSystem:
                 command=command,
                 type=type,
                 data=json_encode(data))
+            # print(post_to_filesystem)
             return post_to_filesystem
         except FileSystemException:
             pass
@@ -809,7 +869,7 @@ class FileSystem:
         '''
             This function will delete the file on the cloud on the path provided.
 
-                filepath (str) - path to the file on the cloud
+                @param: filepath (str) - path to the file on the cloud
         '''
         filename = basename(filepath)
         file = filepath.split('.')[0]
@@ -834,7 +894,7 @@ class FileSystem:
         '''
             This function will delete the file on the cloud on the path provided.
 
-                filepath (str) - path to the file on the cloud
+                @param: filepath (str) - path to the file on the cloud
         '''
         base_directory = directory.split('/')[0]
         dirname = directory.split('/')[1]
@@ -873,8 +933,78 @@ class FileSystem:
             pass
 
 
+class SessionInitializationException(Exception):
+    def __init__(self):
+        print('[SessionInitializationException]:    The session has failed to initialize.')
 
-#   The main function can be used to invoke the "run local file on cloud" pipeline
+
+class SessionTerminationException(Exception):
+    def __init__(self):
+        print('[SessionTerminationException]:       The session failed to terminate.')
+
+
+class SessionTypes:
+    NOTEBOOK = 'notebook'
+    CONSOLE  = 'console'
+    FILE     = 'file'
+
+
+class SessionManager:
+    ''' 
+        Session management object
+            @param: user (User)
+    '''
+    def __init__(self, user: User, type: SessionTypes, path: str = None):
+        self._route = 'api/sessions'
+        self._user = user
+        self._session_id = self._createSession(user, type=type, path=path)
+    
+    def _createSession(self, user: User, type: SessionTypes, path: str = None):
+        command = self._route
+        data = {
+            'name': str(user.id),
+            'path': f'{path}',
+            'type': type
+        }
+        try:
+            post_to_sessions = CommandManager(
+                self._user).createRunCommand(
+                    command=command,
+                    type=RequestType.POST,
+                    data=json_encode(data))
+            # self._kernel_id = post_to_sessions['kernel']['id']
+            return post_to_sessions['id']
+        except SessionInitializationException:
+            pass
+
+
+    def createWebsocket(self):
+        ''' 
+            Creates a websocket connection to specific session
+        '''
+        log = logging.getLogger('KernelClient')
+        try:
+            return KernelClient(
+                HTTP_API_ENDPOINT,
+                WS_API_ENDPOINT,
+                self._session_id,
+                timeout=60,
+                logger=log)
+        except WebsocketIntitializationException:
+            pass
+
+
+    def __del__(self):
+        command = f'{self._route}/{self._session_id}'
+        try:
+            CommandManager(self._user).createRunCommand(
+                command=command,
+                type=RequestType.DELETE)
+        except SessionTerminationException:
+            pass
+
+
+
 def __main__():
     description='''
         This function accepts the path to the local .py script
@@ -883,8 +1013,8 @@ def __main__():
 
         Usage:
 
-        python openstrate --file='<path to your .py file>'
-        python openstrate -f='<path to your .py file>'
+        send --file ='<path to your local .py file>'
+        send -f     ='<path to your local .py file>'
     '''
     argv = sys.argv[1:]
     try:
