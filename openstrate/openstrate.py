@@ -26,17 +26,17 @@ HTTP_API_ENDPOINT = f'http://{API_HOST}:8888/api/kernels'
 WS_API_ENDPOINT = f'ws://{API_HOST}:8888/api/kernels'
 
 
-#   Types of requests available to openstrate
 class RequestType:
-
+    '''Types of requests available to openstrate'''
     GET = 'get'
     POST = 'post'
     PUT = 'put'
     PATCH = 'patch'
     DELETE = 'delete'
 
-#   Types of HTTP response status codes
+
 class ResponseCode:
+    '''Types of HTTP response status codes'''
     OK          = 200
     CREATED     = 201
     NO_CONTENT  = 204
@@ -73,23 +73,24 @@ class KernelClient():
     POST_IDLE_TIMEOUT = 0.5
     DEFAULT_INTERRUPT_WAIT = 1
 
-    def __init__(self, http_api_endpoint, ws_api_endpoint, kernel_id, timeout=REQUEST_TIMEOUT, logger=None):
+    def __init__(self, http_api_endpoint, ws_api_endpoint, kernel_id, timeout=REQUEST_TIMEOUT, session_id=None, logger=None):
+        self.access_token = ACCESS_TOKEN
+        self.kernel_id = kernel_id
+        self.session_id = session_id
         self.response_reader = Thread(target=self._read_responses)
         self.http_api_endpoint = http_api_endpoint
         self.kernel_http_api_endpoint = f"{http_api_endpoint}/{kernel_id}"
         self.ws_api_endpoint = ws_api_endpoint
-        self.kernel_ws_api_endpoint = f"{ws_api_endpoint}/{kernel_id}/channels"
+        self.kernel_ws_api_endpoint = f"{ws_api_endpoint}/{kernel_id}/channels?token={self.access_token}"
         self.shutting_down = False
         self.restarting = False
-        self.kernel_id = kernel_id
         self.kernel_socket = None
         self.log = logger
         self.log.debug(f"Initializing kernel client ({kernel_id}) to {self.kernel_ws_api_endpoint}")
         self.response_queues = {}
-        self.access_token = ACCESS_TOKEN
         try:
             self.kernel_socket = websocket.create_connection(
-                f"{ws_api_endpoint}/{kernel_id}/channels?token={self.access_token}", timeout=timeout, enable_multithread=True
+                self.kernel_ws_api_endpoint, timeout=timeout, enable_multithread=True
             )
         except Exception as e:
             self.log.error(e)
@@ -548,7 +549,6 @@ class Kernel:
     ''' 
         Kernel objects which can be connected to via websocket connection
     '''
-
     def _createKernel(self, user: User):
         ''' 
             Creates a new Python kernel, inherits the User object
@@ -567,29 +567,6 @@ class Kernel:
             return kernel_id      
         except KernelInitializationException:
             pass
-    
-
-    def _createKernelCWD(self, user: User, cwd: str):
-        ''' 
-            Creates a new kernel at specific working directory
-                @param: user (User) 
-                @param: cwd  (str) 
-        '''
-        data = {
-            'name': PYTHON_INTERPRETER,
-            'path': cwd
-        }
-        try:
-            post_to_kernels = CommandManager(
-                user).createRunCommand(
-                    command=self._route, 
-                    type=RequestType.POST,
-                    data=json_encode(data))
-            kernel_id = post_to_kernels['id']
-            return kernel_id      
-        except KernelInitializationException:
-            pass
-
 
     def _createWebsocket(self, kernel_id: str):
         ''' 
@@ -606,7 +583,6 @@ class Kernel:
                 logger=log)
         except WebsocketIntitializationException:
             pass
-
 
     def _deleteKernel(self, user: User, kernel_id: str):
         delete_to_kernels = CommandManager(user).createCommand(f'api/kernels/{kernel_id}', 'delete')
@@ -627,7 +603,6 @@ class Kernel:
             assert run_res.status_code == ResponseCode.NO_CONTENT, KernelTerminationException
         except KernelTerminationException:
             pass
-        
 
     def __init__(self, user = None):
         ''' Initialization of the Kernel class starts with authentication pipeline '''
@@ -643,10 +618,11 @@ class Kernel:
             pass
 
 
-
-# Initialization of openstrate command line console
-def write():
-    kernel = Kernel().comm
+def write(user: User):
+    '''Initialization of openstrate command line console'''
+    session = SessionManager(user)
+    session.createSession(SessionTypes.CONSOLE, path='/home/jupyter_folder')
+    kernel = session.connect()
     print("Enter/Paste your content. Ctrl-D to save it. (Ctrl-Z + Enter on Windows)")
     while True:
         contents = []
@@ -657,11 +633,11 @@ def write():
                 break
             contents.append('\n')
             contents.append(line)
-        print(kernel.execute(contents)[0].strip())
+        print(bytes(kernel.execute(contents)[0].strip(), encoding="ascii").decode('unicode_escape'))
 
 
-# Writes the entire contents of a python file into console and runs
 def run_local_file(filepath: str):
+    '''Writes the entire contents of a python file into console and runs'''
     kernel = Kernel().comm
     contents = []
     with open(filepath, mode='r', encoding='utf8') as file:
@@ -670,26 +646,24 @@ def run_local_file(filepath: str):
         file.close()
     result = kernel.execute(contents)[0].strip()
     kernel.shutdown()
-    return result    
+    return bytes(result, encoding="ascii").decode('unicode_escape')
 
 
 class FileSystem:
     ''' Functions for the Cloud file system '''
-
     def __init__(self, user: User):
         self._route = 'api/contents'
         self._user = user
-    
 
     def check_file_exists(self, filepath: str):
         ''' 
             Checks if a file exists on the cloud on the 
                 @param: filepath (str) 
         '''
-        command = f'{self._route}{filepath}'
+        command = f'{self._route}/{filepath}'
         data = {
             'type': 'file',
-            'path': f'{filepath}'
+            'path': f'/home/jupyter_folder/{filepath}'
         }
         try:
             get_filesystem = CommandManager(
@@ -705,43 +679,40 @@ class FileSystem:
                 return False
             elif key == 'name':
                 return (get_filesystem[key] == basename(filepath))
-    
 
-    def _run_remote_file(self, filepath: str):
+    def _run_file_remotely(self, file_data):
         ''' 
             Run a remote file on the remote 
                 @param: filepath (str) 
         '''
         try:
-            kernel = Kernel(self._user).comm
-            command = f'!{PYTHON_INTERPRETER} {filepath}'
-            result = kernel.execute(command)[0].strip()
+            session = SessionManager(self._user)
+            session.createSession(SessionTypes.FILE, path='/home/jupyter_folder')
+            kernel = session.connect()
+            result = kernel.execute(file_data)[0].strip()
             kernel.shutdown()
-            print(result)
-            return result
+            return bytes(result, encoding="ascii").decode('unicode_escape')
         except ScriptExecutionFailureException:
             pass
-        
 
     def run_script(self, path_to_script: str):
         ''' 
             Runs a script on the cloud, checks that script exists
                 @param: filepath (str) 
         '''
-        # assert self.check_file_exists(filepath=path_to_script), FileSystemException
-        return self._run_remote_file(filepath=path_to_script)
-    
-
+        assert self.check_file_exists(filepath=path_to_script), FileSystemException
+        file_content = self.file_contents(filepath=path_to_script)
+        return self._run_file_remotely(file_data=file_content)
 
     def file_contents(self, filepath: str):
         ''' 
             Fetches the contents of a file on the cloud 
                 @param: filepath (str) 
         '''
-        command = f'{self._route}{filepath}'
+        command = f'{self._route}/{filepath}'
         data = {
             'type': 'file',
-            'path': f'{filepath}'
+            'path': f'/home/jupyter_folder/{filepath}'
         }
         try:
             get_filesystem = CommandManager(
@@ -749,10 +720,9 @@ class FileSystem:
                     command=command,
                     type=RequestType.GET,
                     data=json_encode(data))
-            return get_filesystem
+            return get_filesystem['content']
         except FileSystemException:
             return None
-
 
     def directory_contents(self, directory: str):
         ''' 
@@ -774,7 +744,6 @@ class FileSystem:
             return get_filesystem
         except FileSystemException:
             return None
-    
 
     def create_directory(self, directory: str):
         """ 
@@ -797,7 +766,6 @@ class FileSystem:
             return post_to_filesystem
         except FileSystemException:
             pass
-
 
     def create_file(self, filepath: str):
         '''
@@ -826,7 +794,6 @@ class FileSystem:
         except FileSystemException:
             pass
     
-
     def copy_local_file(self, sourcefile_path: str, filepath: str):
         '''
             This function will determine if a file exists on the local machine,
@@ -839,7 +806,7 @@ class FileSystem:
         filename = basename(filepath)
         file = filepath.split('.')[0]
         extension = filename.split('.')[1]
-        command = f'{self._route}{file}.{extension}'
+        command = f'{self._route}/{file}.{extension}'
         file_data = None
         if os.path.exists(sourcefile_path):
             with open(file=sourcefile_path, mode='r') as content:
@@ -849,7 +816,7 @@ class FileSystem:
             'name': file,
             'type': 'file',
             'format': 'text',
-            'path': filepath,
+            'path': f'/home/jupyter_folder/{filepath}',
             'content': file_data
         }
         try:
@@ -858,13 +825,10 @@ class FileSystem:
                 command=command,
                 type=type,
                 data=json_encode(data))
-            # print(post_to_filesystem)
             return post_to_filesystem
         except FileSystemException:
             pass
 
-
-    # Deletes a file on the cloud
     def delete_file(self, filepath: str):
         '''
             This function will delete the file on the cloud on the path provided.
@@ -887,50 +851,6 @@ class FileSystem:
             return delete_to_filesystem
         except FileSystemException:
             pass
-    
-
-    # Deletes a directory on the cloud
-    def delete_directory(self, directory: str):
-        '''
-            This function will delete the file on the cloud on the path provided.
-
-                @param: filepath (str) - path to the file on the cloud
-        '''
-        base_directory = directory.split('/')[0]
-        dirname = directory.split('/')[1]
-        if base_directory:
-            try:
-                parent_dir = self.directory_contents(base_directory)
-                workspace_directories = []
-                for dir in parent_dir:
-                    workspace_directories.append(dir['name'])
-                # Directory should exist before deleting
-                assert dirname in workspace_directories, FileSystemException
-            except FileSystemException:
-                pass
-        else:   # This directory exist under /root
-            try:
-                parent_dir = self.directory_contents('/')['content']
-                workspace_directories = []
-                for dir in parent_dir:
-                    workspace_directories.append(dir['name'])
-                # Directory should exist before deleting
-                assert dirname in workspace_directories, FileSystemException
-            except FileSystemException:
-                pass
-        command = f'{self._route}{directory}'
-        data = {
-            'path': directory,
-        }
-        try:
-            type = RequestType.DELETE
-            delete_to_filesystem = CommandManager(self._user).createRunCommand(
-                command=command,
-                type=type,
-                data=json_encode(data))
-            return delete_to_filesystem
-        except FileSystemException:
-            pass
 
 
 class SessionInitializationException(Exception):
@@ -941,6 +861,11 @@ class SessionInitializationException(Exception):
 class SessionTerminationException(Exception):
     def __init__(self):
         print('[SessionTerminationException]:       The session failed to terminate.')
+
+
+class SessionCommunicationException(Exception):
+    def __init__(self):
+        print('[SessionCommunicationException]:     Failed to communicate with session.')
 
 
 class SessionTypes:
@@ -954,15 +879,14 @@ class SessionManager:
         Session management object
             @param: user (User)
     '''
-    def __init__(self, user: User, type: SessionTypes, path: str = None):
+    def __init__(self, user: User):
         self._route = 'api/sessions'
         self._user = user
-        self._session_id = self._createSession(user, type=type, path=path)
     
-    def _createSession(self, user: User, type: SessionTypes, path: str = None):
+    def createSession(self, type: SessionTypes, path: str = None):
         command = self._route
         data = {
-            'name': str(user.id),
+            'name': str(self._user.id),
             'path': f'{path}',
             'type': type
         }
@@ -972,29 +896,38 @@ class SessionManager:
                     command=command,
                     type=RequestType.POST,
                     data=json_encode(data))
-            # self._kernel_id = post_to_sessions['kernel']['id']
-            return post_to_sessions['id']
+            self._session_id = post_to_sessions['id']
+            self._kernel_id = post_to_sessions['kernel']['id']
+            return post_to_sessions
         except SessionInitializationException:
             pass
 
+    def get_session(self):
+        ''' Retrieves information about an active session '''
+        command = self._route
+        try:
+            get_to_sessions = CommandManager(
+                self._user).createRunCommand(
+                    command=command,
+                    type=RequestType.GET)
+            return get_to_sessions
+        except SessionCommunicationException:
+            pass
 
-    def createWebsocket(self):
-        ''' 
-            Creates a websocket connection to specific session
-        '''
+    def connect(self):
+        ''' Creates a websocket connection to active session '''
         log = logging.getLogger('KernelClient')
         try:
             return KernelClient(
                 HTTP_API_ENDPOINT,
                 WS_API_ENDPOINT,
-                self._session_id,
+                kernel_id=self._kernel_id,
                 timeout=60,
                 logger=log)
         except WebsocketIntitializationException:
             pass
 
-
-    def __del__(self):
+    def deleteSession(self):
         command = f'{self._route}/{self._session_id}'
         try:
             CommandManager(self._user).createRunCommand(
@@ -1023,4 +956,4 @@ def __main__():
         print(f'File Input Error \n {description}')
     for name, value in options:
         if name in ['-f', '--file']:
-            run_local_file(value)
+            print(run_local_file(value))
