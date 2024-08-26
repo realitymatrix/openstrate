@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "openstrate"
-version = "0.2.3"
+version = "0.2.4"
 description = "Interface with Python machine vision sandbox over the internet."
 authors = ["Petr Korolev <peterkorolev95@gmail.com>"]
 license = "Unlicense"
