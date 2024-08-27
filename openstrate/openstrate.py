@@ -618,9 +618,12 @@ class Kernel:
             pass
 
 
-def write(user: User):
+def write(user = None):
     '''Initialization of openstrate command line console'''
-    session = SessionManager(user)
+    if user == None:
+        session = SessionManager(User())
+    else:
+        session = SessionManager(user)
     session.createSession(SessionTypes.CONSOLE, path='/home/jupyter_folder')
     kernel = session.connect()
     print("Enter/Paste your content. Ctrl-D to save it. (Ctrl-Z + Enter on Windows)")
@@ -638,12 +641,15 @@ def write(user: User):
 
 def run_local_file(filepath: str):
     '''Writes the entire contents of a python file into console and runs'''
+    try:
+        contents = []
+        with open(filepath, mode='r', encoding='utf8') as file:
+            for line in file:
+                contents.append(line)
+            file.close()
+    except FileSystemException:
+        pass
     kernel = Kernel().comm
-    contents = []
-    with open(filepath, mode='r', encoding='utf8') as file:
-        for line in file:
-            contents.append(line)
-        file.close()
     result = kernel.execute(contents)[0].strip()
     kernel.shutdown()
     return bytes(result, encoding="ascii").decode('unicode_escape')
